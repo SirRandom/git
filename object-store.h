@@ -247,7 +247,7 @@ int oid_object_info(struct repository *r, const struct object_id *, unsigned lon
 
 
 void hash_object_file(const struct git_hash_algo *algo, const void *buf,
-		      unsigned long len, enum object_type type,
+		      size_t len, enum object_type type,
 		      struct object_id *oid);
 
 /**
@@ -260,11 +260,11 @@ void hash_object_file(const struct git_hash_algo *algo, const void *buf,
  * was.
  */
 int hash_object_file_oideq(const struct git_hash_algo *algo, const void *buf,
-			   unsigned long len, enum object_type type,
+			   size_t len, enum object_type type,
 			   const struct object_id *oid,
 			   struct object_id *real_oidp);
 
-int write_object_file_flags(const void *buf, unsigned long len,
+int write_object_file_flags(const void *buf, size_t len,
 			    enum object_type type, struct object_id *oid,
 			    unsigned flags);
 static inline int write_object_file(const void *buf, unsigned long len,
