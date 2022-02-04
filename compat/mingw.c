@@ -1513,11 +1513,23 @@ static const char *quote_arg_msys2(const char *arg)
 	return strbuf_detach(&buf, 0);
 }
 
+static int use_pathext = -1;
+static void set_use_pathext(void) {
+	use_pathext = 0;
+	git_config_get_bool("windows.usepathext", &use_pathext);
+}
+
 static const char *parse_interpreter(const char *cmd)
 {
 	static char buf[MAX_PATH];
 	char *p, *opt;
 	int n, fd;
+
+	if(use_pathext < 0)
+		set_use_pathext();
+
+	if(use_pathext)
+		return NULL;
 
 	/* don't even try a .exe */
 	n = strlen(cmd);
@@ -1548,6 +1560,26 @@ static const char *parse_interpreter(const char *cmd)
 	return p+1;
 }
 
+static char *lookup_pathext(const char *dir, int dirlen, const char *cmd,
+			    const char *ext, int extlen)
+{
+	char path[MAX_PATH];
+	wchar_t wpath[MAX_PATH];
+
+	snprintf(path, sizeof(path), "%.*s\\%s%.*s",
+		 dirlen, dir, cmd, extlen, ext);
+
+	if(xutftowcs_path(wpath, path) < 0)
+		return NULL;
+
+	if(_waccess(wpath, F_OK) == 0
+	&& !(GetFileAttributesW(wpath) & FILE_ATTRIBUTE_DIRECTORY)) {
+		return xstrdup(path);
+	}
+
+	return NULL;
+}
+
 /*
  * exe_only means that we only want to detect .exe files, but not scripts
  * (which do not have an extension)
@@ -1555,22 +1587,47 @@ static const char *parse_interpreter(const char *cmd)
 static char *lookup_prog(const char *dir, int dirlen, const char *cmd,
 			 int isexe, int exe_only)
 {
-	char path[MAX_PATH];
-	wchar_t wpath[MAX_PATH];
-	snprintf(path, sizeof(path), "%.*s\\%s.exe", dirlen, dir, cmd);
+	if(use_pathext < 0)
+		set_use_pathext();
 
-	if (xutftowcs_path(wpath, path) < 0)
-		return NULL;
+	if(use_pathext) {
+		char *prog = NULL;
+		const char *pathext = mingw_getenv("PATHEXT");
+		if(!pathext)
+			return NULL;
 
-	if (!isexe && _waccess(wpath, F_OK) == 0)
-		return xstrdup(path);
-	wpath[wcslen(wpath)-4] = '\0';
-	if ((!exe_only || isexe) && _waccess(wpath, F_OK) == 0) {
-		if (!(GetFileAttributesW(wpath) & FILE_ATTRIBUTE_DIRECTORY)) {
-			path[strlen(path)-4] = '\0';
+		while(!prog) {
+			const char *sep = strchrnul(pathext, ';');
+			int extlen = sep - pathext;
+
+			if(extlen)
+				prog = lookup_pathext(dir, dirlen, cmd, pathext,
+						      extlen);
+			if(!*sep)
+				break;
+			pathext = sep + 1;
+		}
+
+		return prog;
+	} else {
+		char path[MAX_PATH];
+		wchar_t wpath[MAX_PATH];
+		snprintf(path, sizeof(path), "%.*s\\%s.exe", dirlen, dir, cmd);
+
+		if (xutftowcs_path(wpath, path) < 0)
+			return NULL;
+
+		if (!isexe && _waccess(wpath, F_OK) == 0)
 			return xstrdup(path);
+		wpath[wcslen(wpath)-4] = '\0';
+		if ((!exe_only || isexe) && _waccess(wpath, F_OK) == 0) {
+			if (!(GetFileAttributesW(wpath) & FILE_ATTRIBUTE_DIRECTORY)) {
+				path[strlen(path)-4] = '\0';
+				return xstrdup(path);
+			}
 		}
 	}
+
 	return NULL;
 }
 
@@ -1882,6 +1939,19 @@ static pid_t mingw_spawnve_fd(const char *cmd, const char **argv, char **deltaen
 		is_msys2_sh(cmd ? cmd : *argv) ?
 		quote_arg_msys2 : quote_arg_msvc;
 	const char *strace_env;
+
+	trace_printf("cmd:     %s", cmd);
+	trace_printf("dir:     %s", dir);
+	trace_printf("prepend: %s", prepend_cmd);
+	trace_printf("in:      %d", fhin);
+	trace_printf("out:     %d", fhout);
+	trace_printf("err:     %d", fherr);
+	trace_printf("argv:");
+	for(int i = 0; argv[i]; ++i)
+		trace_printf("\t%s", argv[i]);
+	trace_printf("deltaenv:");
+	for(int i = 0; deltaenv[i]; ++i)
+		trace_printf("\t%s", deltaenv[i]);
 
 	/* Make sure to override previous errors, if any */
 	errno = 0;
